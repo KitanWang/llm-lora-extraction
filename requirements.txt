@@ -1,0 +1,29 @@
+# ── 项目 A：LLM 微调与评测对比实验 ────────────────────────────────
+# 依赖分两步安装（见 README）：
+#   1) torch 走 CUDA 12.8 专用索引（RTX 50系 / sm_120 需要 cu128 及以上）
+#        uv pip install -r requirements-torch.txt
+#   2) 其余依赖走 PyPI
+#        uv pip install -r requirements.txt
+
+# 模型与训练
+transformers>=4.46,<5
+peft>=0.13
+trl>=0.13,<1.0
+datasets>=3.0
+accelerate>=1.0
+bitsandbytes>=0.45          # QLoRA 4bit 量化（NF4）
+
+# 数据侧（本项目的重点）
+pandas>=2.2
+numpy>=1.26
+pyarrow>=17.0
+pydantic>=2.9
+PyYAML>=6.0
+
+# 工程与展示
+tqdm>=4.66
+tabulate>=0.9
+matplotlib>=3.9
+
+# 测试
+pytest>=8.0

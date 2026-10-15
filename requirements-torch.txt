@@ -1,0 +1,5 @@
+# PyTorch：RTX 5060 Laptop (Blackwell / sm_120) 必须使用 CUDA 12.8 及以上的官方构建。
+# 安装命令（不要用默认 PyPI 索引，默认索引的 manylinux 轮子不含 sm_120 内核）：
+#   uv pip install --index-url https://download.pytorch.org/whl/cu128 -r requirements-torch.txt
+torch==2.9.1+cu128
+torchvision==0.24.1+cu128
