@@ -125,7 +125,11 @@ class TestCollator:
             {"input_ids": [1, 2], "attention_mask": [1, 1], "labels": [-100, 2]},
         ])
         for k, v in batch.items():
-            assert v.dtype == torch.long, f"{k} 必须是 int64"
+            if torch.is_tensor(v):
+                assert v.dtype == torch.long, f"{k} 必须是 int64"
+        # logits_to_keep 是标量 int（不是张量），直接交给模型 forward
+        if "logits_to_keep" in batch:
+            assert isinstance(batch["logits_to_keep"], int)
 
 
 class TestTrainConfig:
@@ -178,3 +182,104 @@ class TestTrainConfig:
         assert cfg.per_device_train_batch_size == 1
         assert cfg.gradient_checkpointing
         assert cfg.optim == "paged_adamw_8bit"
+
+
+class TestLogitsToKeep:
+    """`logits_to_keep` 优化：只对答案位置算 logits，是 8GB 卡跑 7B 的关键。
+
+    但这是"看起来对、错了也不报错"的那类改动——如果 shift_labels 与保留的
+    logits 区间错位，训练照样收敛、loss 照样下降，模型学的却是错位一环的标签。
+    所以必须把对齐关系钉死。
+    """
+
+    def test_alignment_with_right_padding(self):
+        """右侧 padding 时，答案不在序列末尾 —— 最容易错位的情形。"""
+        torch = pytest.importorskip("torch")
+        from llm_extract.train.sft import IGNORE_INDEX, SupervisedCollator
+
+        class FakeTok:
+            pad_token_id = 0
+            eos_token_id = 1
+
+        # 样本 A：真实长度 12，答案 3 个；样本 B：真实长度 10（尾部 2 pad），答案 2 个
+        a_ids = list(range(100, 112))
+        a_lbl = [IGNORE_INDEX] * 9 + [200, 201, 202]
+        b_ids = list(range(200, 210))
+        b_lbl = [IGNORE_INDEX] * 8 + [300, 301]
+
+        batch = SupervisedCollator(FakeTok(), use_logits_to_keep=True)([
+            {"input_ids": a_ids, "attention_mask": [1] * 12, "labels": a_lbl},
+            {"input_ids": b_ids, "attention_mask": [1] * 10, "labels": b_lbl},
+        ])
+
+        k = batch["logits_to_keep"]
+        t = 12                                   # max_len
+        labels = batch["labels"]                 # [2, 12]
+        shift = batch["shift_labels"]            # [2, k]
+
+        assert shift.shape == (2, k)
+        # 核心不变量：logits 保留的是最后 k 个位置 [t-k, t-1]，
+        # 因此 shift[i, j] 必须等于 labels[i, t-k+j+1]（越界则为 ignore）
+        for i in range(2):
+            for j in range(k):
+                pos = t - k + j + 1
+                want = int(labels[i, pos]) if pos < t else IGNORE_INDEX
+                got = int(shift[i, j])
+                assert got == want, (
+                    f"样本{i} 第{j}列错位：logits[{t-k+j}] 应配 labels[{pos}]={want}，实际 {got}"
+                )
+
+    def test_supervised_token_count_preserved(self):
+        """优化不能改变"有多少个 token 参与 loss"。"""
+        torch = pytest.importorskip("torch")
+        from llm_extract.train.sft import IGNORE_INDEX, SupervisedCollator
+
+        class FakeTok:
+            pad_token_id = 0
+            eos_token_id = 1
+
+        feats = [
+            {"input_ids": [1, 2, 3, 4, 5], "attention_mask": [1] * 5,
+             "labels": [IGNORE_INDEX, IGNORE_INDEX, 7, 8, 9]},
+            {"input_ids": [1, 2, 3], "attention_mask": [1] * 3,
+             "labels": [IGNORE_INDEX, 4, 5]},
+        ]
+        base = SupervisedCollator(FakeTok(), use_logits_to_keep=False)(feats)
+        opt = SupervisedCollator(FakeTok(), use_logits_to_keep=True)(feats)
+
+        n_base = int((base["labels"] != IGNORE_INDEX).sum())
+        n_opt = int((opt["shift_labels"] != IGNORE_INDEX).sum())
+        assert n_base == n_opt, f"监督 token 数被改变：{n_base} -> {n_opt}"
+
+    def test_k_covers_all_supervision(self):
+        """k 必须覆盖最靠前的监督位置，不能漏算。"""
+        torch = pytest.importorskip("torch")
+        from llm_extract.train.sft import IGNORE_INDEX, SupervisedCollator
+
+        class FakeTok:
+            pad_token_id = 0
+            eos_token_id = 1
+
+        feats = [
+            {"input_ids": list(range(20)), "attention_mask": [1] * 20,
+             "labels": [IGNORE_INDEX] * 5 + list(range(15))},
+        ]
+        batch = SupervisedCollator(FakeTok(), use_logits_to_keep=True)(feats)
+        # first_sup = 5 (位置5的标签预测位置6...)，
+        # 需要 logits[4] 来预测 labels[5]，故 k 至少为 20-4=16
+        assert batch["logits_to_keep"] >= 16
+
+    def test_all_ignored_batch_does_not_crash(self):
+        """全 -100 的 batch（理论上不该出现）不能让 collator 崩掉。"""
+        torch = pytest.importorskip("torch")
+        from llm_extract.train.sft import IGNORE_INDEX, SupervisedCollator
+
+        class FakeTok:
+            pad_token_id = 0
+            eos_token_id = 1
+
+        batch = SupervisedCollator(FakeTok(), use_logits_to_keep=True)([
+            {"input_ids": [1, 2, 3], "attention_mask": [1, 1, 1],
+             "labels": [IGNORE_INDEX] * 3},
+        ])
+        assert batch["input_ids"].shape[0] == 1

@@ -79,6 +79,7 @@ class TrainConfig:
 
     max_train_samples: int | None = None   # 冒烟测试用
     report_to: str = "none"
+    logits_to_keep: bool = True            # 只算答案部分的 logits，8GB 卡必开
 
     @classmethod
     def from_yaml(cls, path: Path) -> "TrainConfig":
@@ -161,22 +162,67 @@ def make_dataset(tokenizer, rows: list[dict[str, Any]], max_seq_length: int) -> 
 
 
 class SupervisedCollator:
-    """右侧 padding + labels 同步 padding（pad 位置用 -100，不计 loss）。"""
+    """右侧 padding + labels 同步 padding（pad 位置用 -100，不计 loss）。
 
-    def __init__(self, tokenizer):
+    另外负责构造 `shift_labels` 与 `num_logits_to_keep`，用于**只计算答案部分的 logits**。
+
+    为什么这一步对 8 GB 显卡是决定性的：
+        语言模型头的输出是 [batch, seq_len, vocab]，Qwen 的 vocab = 151936。
+        seq_len=1024、bf16 时，光 logits 就是 1024 × 151936 × 2B ≈ 311 MB，
+        loss 里还要 upcast 成 fp32（再 622 MB）并保存反向所需的中间量。
+        而答案（目标 JSON）只有 ~80 个 token —— 也就是说 **90% 以上的 logits 算完就扔**。
+
+        `logits_to_keep=K` 让 lm_head 只对最后 K 个位置做投影，显存直接降一个数量级。
+        实测（tests/test_training.py::test_logits_to_keep_matches_full_loss）
+        与完整计算相比 loss **逐位相同**，不是近似。
+    """
+
+    def __init__(self, tokenizer, use_logits_to_keep: bool = True):
         self.pad_id = tokenizer.pad_token_id
         if self.pad_id is None:
             self.pad_id = tokenizer.eos_token_id
+        self.use_logits_to_keep = use_logits_to_keep
 
     def __call__(self, features: list[dict[str, list[int]]]) -> dict[str, torch.Tensor]:
         max_len = max(len(f["input_ids"]) for f in features)
-        batch = {"input_ids": [], "attention_mask": [], "labels": []}
+        input_ids, attention_mask, labels = [], [], []
         for f in features:
             pad = max_len - len(f["input_ids"])
-            batch["input_ids"].append(f["input_ids"] + [self.pad_id] * pad)
-            batch["attention_mask"].append(f["attention_mask"] + [0] * pad)
-            batch["labels"].append(f["labels"] + [IGNORE_INDEX] * pad)
-        return {k: torch.tensor(v, dtype=torch.long) for k, v in batch.items()}
+            input_ids.append(f["input_ids"] + [self.pad_id] * pad)
+            attention_mask.append(f["attention_mask"] + [0] * pad)
+            labels.append(f["labels"] + [IGNORE_INDEX] * pad)
+
+        batch = {
+            "input_ids": torch.tensor(input_ids, dtype=torch.long),
+            "attention_mask": torch.tensor(attention_mask, dtype=torch.long),
+            "labels": torch.tensor(labels, dtype=torch.long),
+        }
+
+        if self.use_logits_to_keep:
+            # ── 推导 logits_to_keep 与 shift_labels ──────────────────────
+            # 目标：lm_head 只对「需要算 loss 的位置」做投影。
+            # 语言模型的因果对齐是 logits[t] 预测 labels[t+1]，因此：
+            #   - 需要 logits 的最小位置 = 所有样本中最靠前的监督 token 位置 first_min
+            #     （它要预测 labels[first_min+1]）
+            #   - 保留区间取到序列末尾，长度 k = T - first_min + 1
+            # 注意：**不能**简单地取 labels 左移后的末尾 k 个 —— 右侧 padding 会让
+            # 尾部混进 pad，导致 logits 与标签整体错位（loss 照样下降，但学的是错的东西）。
+            t = max_len
+            first_sups = [
+                int((lbl != IGNORE_INDEX).nonzero()[0])
+                for lbl in batch["labels"]
+                if (lbl != IGNORE_INDEX).any()
+            ]
+            if first_sups:
+                first_min = min(first_sups)
+                k = min(t - first_min + 1, t)
+                # labels 尾部补一位，使 logits[t] ↔ shift[t]
+                padded = torch.nn.functional.pad(
+                    batch["labels"], (0, 1), value=IGNORE_INDEX
+                )
+                batch["shift_labels"] = padded[:, t - k + 1:].contiguous()
+                batch["logits_to_keep"] = k
+        return batch
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -305,7 +351,7 @@ def main() -> None:
         args=targs,
         train_dataset=train_ds,
         eval_dataset=val_ds,
-        data_collator=SupervisedCollator(tokenizer),
+        data_collator=SupervisedCollator(tokenizer, use_logits_to_keep=cfg.logits_to_keep),
     )
 
     print("=== 开始训练 ===")
