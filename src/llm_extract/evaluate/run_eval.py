@@ -69,7 +69,15 @@ def build_model(model_path: str, adapter: str | None, load_in_4bit: bool):
         from peft import PeftModel
 
         model = PeftModel.from_pretrained(model, adapter)
-        model = model.merge_and_unload()   # 合并后推理更快，且导出的是纯模型
+        if load_in_4bit:
+            # ⚠️ 4bit 基座**不能** merge_and_unload()：
+            # 它会把 NF4 权重重建成 bf16 全精度模型（7B ≈ 15 GB），
+            # 8 GB 显卡上必然 OOM —— 而且报错发生在 merge 之后，很难定位。
+            # 保持 PeftModel 包装、让 adapter 在运行时生效即可，显存占用不变。
+            pass
+        else:
+            # bf16 基座可以合并，推理更快，且等价于导出纯模型
+            model = model.merge_and_unload()
 
     model.eval()
     return model, tokenizer

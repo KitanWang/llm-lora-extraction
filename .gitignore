@@ -38,3 +38,5 @@ reports/*.log
 
 # 模型权重目录（约 20GB，由 scripts/download_models.sh 拉取，不入库）
 models/
+configs/*.local.yaml
+reports/vram_probe_*.json
