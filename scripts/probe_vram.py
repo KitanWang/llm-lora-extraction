@@ -67,6 +67,8 @@ def main() -> None:
     ap.add_argument("--batch-size", type=int, default=1)
     ap.add_argument("--grad-accum", type=int, default=16)
     ap.add_argument("--out", type=Path, default=None)
+    ap.add_argument("--no-logits-to-keep", action="store_true",
+                    help="关闭只算答案 logits 的优化，用于对照测量它省了多少显存")
     ap.add_argument(
         "--seq-ladder",
         type=str,
@@ -160,23 +162,31 @@ def main() -> None:
     print(f"  可训练参数 {n_train:,} / {n_total:,} = {n_train / n_total * 100:.4f}%")
 
     # 构造一个 max_seq_length 长度的真实训练样本（最坏情况）
-    def make_batch(seq_len: int):
+    def make_batch(seq_len: int, use_logits_to_keep: bool = True):
         ids = torch.randint(100, 30000, (args.batch_size, seq_len), device="cuda")
         attn = torch.ones_like(ids)
         lbl = ids.clone()
         lbl[:, : int(seq_len * 0.8)] = -100   # 模拟 prompt mask
-        return ids, attn, lbl
+        extra = {}
+        if use_logits_to_keep:
+            # 与生产 collator 同样的推导：只对答案位置算 logits
+            k = seq_len - int(seq_len * 0.8) + 1
+            padded = torch.nn.functional.pad(lbl, (0, 1), value=-100)
+            extra["shift_labels"] = padded[:, seq_len - k + 1:].contiguous()
+            extra["logits_to_keep"] = k
+        return ids, attn, lbl, extra
 
-    ids, attn, labels = make_batch(args.seq_len)
+    ids, attn, labels, extra = make_batch(args.seq_len, not args.no_logits_to_keep)
 
     model.train()
     reset_peak()
     try:
-        out = model(input_ids=ids, attention_mask=attn, labels=labels)
+        out = model(input_ids=ids, attention_mask=attn, labels=labels, **extra)
         loss = out.loss
         loss.backward()
         results.append(report("3. 前向+反向",
                               {"seq_len": args.seq_len, "micro_bs": args.batch_size,
+                               "logits_to_keep": extra.get("logits_to_keep", "off"),
                                "loss": round(float(loss.detach()), 4)}))
     except torch.cuda.OutOfMemoryError:
         results.append({"stage": "3. 前向+反向", "error": "OOM", "seq_len": args.seq_len})
@@ -239,7 +249,13 @@ def _run_ladder(model, args, results: list[dict]) -> None:
             attn = torch.ones_like(ids)
             lbl = ids.clone()
             lbl[:, : int(seq_len * 0.8)] = -100
-            out = model(input_ids=ids, attention_mask=attn, labels=lbl)
+            ex = {}
+            if not args.no_logits_to_keep:
+                kk = seq_len - int(seq_len * 0.8) + 1
+                ex["shift_labels"] = torch.nn.functional.pad(
+                    lbl, (0, 1), value=-100)[:, seq_len - kk + 1:].contiguous()
+                ex["logits_to_keep"] = kk
+            out = model(input_ids=ids, attention_mask=attn, labels=lbl, **ex)
             out.loss.backward()
             peak = torch.cuda.max_memory_allocated()
             row = report(f"3b. seq_len={seq_len}", {"fits": True})
