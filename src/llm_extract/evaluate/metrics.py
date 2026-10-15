@@ -7,7 +7,7 @@
 | `json_valid_rate`   | 输出能被解析成 JSON 对象的比例（允许 ```json 围栏） |
 | `schema_valid_rate` | 解析成功 **且** 通过 pydantic schema（枚举合法、无多余字段、类型正确） |
 | `field_acc.<f>`     | 单字段准确率，仅统计"可比对"的样本；字符串做归一化宽松匹配，数值容差 1e-6 |
-| `exact_match_rate`  | 9 个字段全部正确的样本比例（最严苛的指标） |
+| `exact_match_rate`  | 输出**格式合规**且 9 个字段全部正确的样本比例（最严苛的指标） |
 | `hallucination_rate`| 在"标注为 null"的字段上，模型**编造了非空值**的比例 —— 抽取任务里最危险的错误 |
 | `omission_rate`     | 在"标注非 null"的字段上，模型输出 null 的比例 |
 | `enum_confusion`    | 枚举字段（currency / payment_terms）的错分方向，用于定位系统性问题 |
@@ -169,7 +169,9 @@ def evaluate_one(
 
     for f in FIELD_ORDER:
         rec.field_correct[f] = values_equal(f, normalized_pred.get(f), gold.get(f))
-    rec.exact_match = all(rec.field_correct.values())
+    # exact_match 要求「格式合规」且「9 个字段全对」。
+    # 只有字段对但多吐了一个字段，下游照样会炸，不能算完全正确。
+    rec.exact_match = rec.schema_ok and all(rec.field_correct.values())
     return rec
 
 

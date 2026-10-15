@@ -84,6 +84,14 @@ class SynthConfig:
         "past_quantity": 0.30,    # 上批数量（干扰本次数量）
     })
     noise_rate: float = 0.45
+    # ── 脏数据注入 ──────────────────────────────────────────────
+    # 真实场景里原始数据从来不是干净的：同一封询价单会被重复投递、
+    # 同一需求会被业务员重复录入、邮件底部会拖着整段历史回复。
+    # 这里如实模拟这三种情况，让下游的 pandas 清洗规则真正起作用
+    # （否则"去重/长度过滤"只是写在代码里、从未被触发过的摆设）。
+    exact_dup_rate: float = 0.06    # 完全重复（转发/重复投递）
+    near_dup_rate: float = 0.09     # 近重复（同需求重复录入，仅语序不同）
+    long_doc_rate: float = 0.06     # 超长（邮件尾部带历史回复线程）
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -372,13 +380,23 @@ class SampleBuilder:
             self.add("phone_hint", "有结果回邮件就行，不用打电话。")
             self.values["contact_phone"] = None
             return
-        style = self.rng.randrange(3)
-        if style == 0:
-            self.add("phone", f"我的电话 {phone}，随时联系。")
-        elif style == 1:
-            self.add("phone", f"联系方式：{phone}")
+        # 手机与固话的书写习惯不同：手机常见 3-4-4 分段，固话是 区号-号码。
+        # 不能拿手机的分段格式去套固话，否则会造出 "051 2-52 900628" 这种假数据。
+        is_mobile = phone.startswith("1") and len(phone) == 11
+        if is_mobile:
+            style = self.rng.randrange(3)
+            if style == 0:
+                self.add("phone", f"我的电话 {phone}，随时联系。")
+            elif style == 1:
+                self.add("phone", f"联系方式：{phone}")
+            else:
+                self.add("phone", f"手机 {phone[0:3]} {phone[3:7]} {phone[7:]}，微信同号。")
         else:
-            self.add("phone", f"手机 {phone[0:3]} {phone[3:7]} {phone[7:]}，微信同号。")
+            style = self.rng.randrange(2)
+            if style == 0:
+                self.add("phone", f"我的电话 {phone}，随时联系。")
+            else:
+                self.add("phone", f"联系方式：{phone}（工作日 9:00-18:00）")
         self.values["contact_phone"] = phone
 
     # ---- 收尾 ----
@@ -491,4 +509,52 @@ def generate(n: int, cfg: SynthConfig, families: list[str]) -> list[Sample]:
         b.add_urgency()
         b.add_phone()
         samples.append(b.finish(ref))
+
+    # ── 注入脏数据 ──────────────────────────────────────────────
+    samples = _inject_dirty(samples, cfg, rng)
     return samples
+
+
+def _inject_dirty(samples: list[Sample], cfg: SynthConfig, rng: random.Random) -> list[Sample]:
+    """模拟真实原始数据里的三类脏数据（见 SynthConfig 注释）。
+
+    注意两点：
+    1. 这里注入的"脏"必须能被 pipeline.clean() 的对应规则识别并剔除，
+       否则就只是往数据集里掺噪声；
+    2. **必须 append 副本、不能 replace 原样本** —— 复制出一条重复记录才是
+       "重复投递"的真实形态；如果把原样本改掉，文本依然全局唯一，
+       去重规则永远不会触发（这个坑踩过一次）。
+    """
+    out: list[Sample] = list(samples)
+    for s in samples:
+        roll = rng.random()
+
+        if roll < cfg.exact_dup_rate:
+            # (1) 完全重复：正文一字不差（同一封询价被重复转发/投递）
+            out.append(Sample(text=s.text, target=dict(s.target),
+                              template_family=s.template_family,
+                              skeleton_key=s.skeleton_key))
+
+        elif roll < cfg.exact_dup_rate + cfg.near_dup_rate:
+            # (2) 近重复：同一条需求被重复录入，只是子句顺序不同。
+            #     正文不同 → 精确去重抓不到，必须靠"骨架+公司+型号"去重。
+            lines = s.text.split("\n")
+            if len(lines) > 4:
+                head, tail, mid = lines[:2], lines[-1:], lines[2:-1]
+                rng.shuffle(mid)
+                lines = head + mid + tail
+            out.append(Sample(text="\n".join(lines), target=dict(s.target),
+                              template_family=s.template_family,
+                              skeleton_key=s.skeleton_key))
+
+        elif roll < cfg.exact_dup_rate + cfg.near_dup_rate + cfg.long_doc_rate:
+            # (3) 超长：邮件底部拖着整段历史回复线程 → 超出长度预算，需按长度过滤
+            quoted = "\n".join(
+                f"> 上一轮沟通记录（{i}）：已确认型号与数量，等待贵司正式报价，请勿重复报价。"
+                for i in range(60)
+            )
+            out.append(Sample(text=s.text + "\n\n----- 历史邮件 -----\n" + quoted,
+                              target=dict(s.target),
+                              template_family=s.template_family,
+                              skeleton_key=s.skeleton_key))
+    return out

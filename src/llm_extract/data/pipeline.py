@@ -62,54 +62,59 @@ def samples_to_frame(samples: list[Sample]) -> pd.DataFrame:
 # ──────────────────────────────────────────────────────────────────
 
 def clean(df: pd.DataFrame, min_chars: int = 40, max_chars: int = 900) -> tuple[pd.DataFrame, dict[str, int]]:
-    """返回清洗后的 DataFrame 与每一步的淘汰计数（用于报告里的数据漏斗）。"""
+    """返回清洗后的 DataFrame 与数据漏斗。
+
+    漏斗的语义统一为「**该步骤执行后剩余多少条**」（键为步骤名），
+    淘汰数由相邻两步相减得到——避免"有时记剩余、有时记淘汰"这种混用。
+    """
     funnel: dict[str, int] = {"raw": len(df)}
     df = df.copy()
 
+    def step(name: str) -> None:
+        funnel[name] = len(df)
+
     # (a) 空白/换行规范化：合成时随机拼接可能产生连续空行
+    #     ⚠️ pandas 3.0 默认用 pyarrow 字符串后端（RE2 正则引擎），RE2 **不支持 `\uXXXX` 转义**，
+    #     会直接抛 ArrowInvalid。这里改用非 raw 字符串，让 Python 先把 `\u3000`
+    #     和 `\n` 解析成真实字符，正则引擎收到的就是字面量。
     df["text"] = (
-        df["text"].str.replace(r"[ \t\u3000]+", " ", regex=True)
-        .str.replace(r"\n{3,}", "\n\n", regex=True)
+        df["text"].str.replace("[ \t\u3000]+", " ", regex=True)
+        .str.replace("\n{3,}", "\n\n", regex=True)
         .str.strip()
     )
-    before = len(df)
     df = df[df["text"].str.len() > 0]
-    funnel["drop_empty_text"] = before - len(df)
+    step("非空正文")
 
     # (b) 正文必须真的包含型号：合成器理论上保证，但这里是最终防线
-    before = len(df)
     df = df[df.apply(lambda r: str(r["product_model"]) in r["text"], axis=1)]
-    funnel["drop_model_not_in_text"] = before - len(df)
+    step("型号在正文中")
 
-    # (c) 精确去重：完全相同的文本只留一条（不同标签的同文本会污染训练）
-    before = len(df)
+    # (c) 文本长度过滤：**放在去重前面**。
+    #     真实流水线里也一样——先用最便宜的规则砍掉明显不可用的样本
+    #     （空文本、超长邮件线程），再去跑代价更高的字符串比较。
+    df["char_len"] = df["text"].str.len()
+    df = df[(df["char_len"] >= min_chars) & (df["char_len"] <= max_chars)]
+    step("长度在合理区间")
+
+    # (d) 精确去重：完全相同的文本只留一条（不同标签的同文本会污染训练）
     df = df.drop_duplicates(subset=["text"], keep="first")
-    funnel["drop_duplicate_text"] = before - len(df)
+    step("精确去重后")
 
-    # (d) 近重复去重：同一模板骨架 + 同公司 + 同型号，只保留一条。
+    # (e) 近重复去重：同一模板骨架 + 同公司 + 同型号，只保留一条。
     #     严格说这不是"重复"，但同骨架大量重复会让验证集指标虚高。
-    before = len(df)
     df["_near_key"] = (
         df["skeleton_key"] + "##" + df["customer_name"].fillna("-") + "##" + df["product_model"]
     )
     df = df.drop_duplicates(subset=["_near_key"], keep="first")
-    funnel["drop_near_duplicate"] = before - len(df)
-
-    # (e) 文本长度过滤：太短信息不全（标签可能对不上），太长浪费显存
-    df["char_len"] = df["text"].str.len()
-    before = len(df)
-    df = df[(df["char_len"] >= min_chars) & (df["char_len"] <= max_chars)]
-    funnel["drop_length_out_of_range"] = before - len(df)
+    step("近重复去重后")
 
     # (f) 标签自洽性：is_urgent 为 True 时正文应含加急线索（防止合成器逻辑错位）
     urgent_kw = "急|尽快|优先|越快越好|压缩|催"
-    before = len(df)
     bad_urgent = df["is_urgent"] & ~df["text"].str.contains(urgent_kw, regex=True)
     df = df[~bad_urgent]
-    funnel["drop_label_inconsistent"] = before - len(df)
+    step("标签自洽")
 
     df = df.drop(columns=["_near_key"]).reset_index(drop=True)
-    funnel["clean"] = len(df)
     return df, funnel
 
 
@@ -173,15 +178,15 @@ def split_dataset(
     # OOD 集：优先挑最长的（长文本更难），保证难度不虚低
     ood = ood_pool.sort_values("n_tokens", ascending=False).head(n_test_ood).copy()
 
-    # 按 skeleton_key 分组，避免同骨架样本同时出现在 train / test
+    # 按 skeleton_key 分组，避免同骨架样本同时出现在 train / test。
+    # 只留出 test_iid 所需的那部分骨架，其余全部投入 train/val —— 不要凭白浪费数据。
     skeletons = sorted(in_dist["skeleton_key"].unique())
-    rng = pd.Series(skeletons).sample(frac=1.0, random_state=seed).tolist()
-    n_groups = len(rng)
-    ood_groups = set(rng[: max(1, int(n_groups * 0.12))])
-    iid_groups = set(rng[max(1, int(n_groups * 0.12)): max(2, int(n_groups * 0.24))])
+    shuffled = pd.Series(skeletons).sample(frac=1.0, random_state=seed).tolist()
+    n_iid_groups = max(1, int(len(shuffled) * 0.15))
+    iid_groups = set(shuffled[:n_iid_groups])
 
     test_iid = in_dist[in_dist["skeleton_key"].isin(iid_groups)].head(n_test_iid).copy()
-    rest = in_dist[~in_dist["skeleton_key"].isin(ood_groups | iid_groups)].copy()
+    rest = in_dist[~in_dist["skeleton_key"].isin(iid_groups)].copy()
 
     val = rest.sample(n=min(n_val, len(rest) // 10), random_state=seed)
     train = rest.drop(val.index)
@@ -205,15 +210,43 @@ def split_dataset(
 # 5. 落盘
 # ──────────────────────────────────────────────────────────────────
 
+def frame_to_records(df: pd.DataFrame) -> list[dict[str, Any]]:
+    """DataFrame → 记录列表，**并把 NaN 还原成 None、把数值还原成正确的 Python 类型**。
+
+    ⚠️ 两个坑都必须处理：
+
+    1. pandas 会把 Python 的 `None` 统一转成 `NaN`（float），直接 `json.dumps` 会写出
+       `NaN`——那不是合法 JSON，`json.loads` 读回来是 `float('nan')` 而不是 `None`。
+       后果是评测时「标注为 null 的字段」根本识别不出来，幻觉率会恒等于 0（假指标）。
+    2. int 列一旦出现 NaN 就整列升格成 float64，`quantity` 会变成 `20000.0`。
+       对下游无伤大雅，但和 schema 声明的 `int` 不符，也会让人怀疑数据质量。
+       这里按字段声明类型显式还原。
+    """
+    obj = df[FIELD_ORDER + ["text", "template_family"]].astype(object)
+    obj = obj.where(pd.notna(obj), None)
+
+    records: list[dict[str, Any]] = []
+    for row in obj.to_dict("records"):
+        rec: dict[str, Any] = {f: row[f] for f in FIELD_ORDER}
+        rec["text"] = row["text"]
+        rec["template_family"] = row["template_family"]
+        # 按 schema 声明的类型还原标量
+        if rec["quantity"] is not None:
+            rec["quantity"] = int(rec["quantity"])
+        if rec["unit_price"] is not None:
+            rec["unit_price"] = float(rec["unit_price"])
+        if rec["is_urgent"] is not None:
+            rec["is_urgent"] = bool(rec["is_urgent"])
+        records.append(rec)
+    return records
+
+
 def write_jsonl(df: pd.DataFrame, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as f:
-        for _, row in df.iterrows():
-            rec = {f: row[f] for f in FIELD_ORDER}
-            rec["text"] = row["text"]
-            rec["target_json"] = row["target_json"]
-            rec["template_family"] = row["template_family"]
-            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        for rec in frame_to_records(df):
+            # allow_nan=False：宁可在这里报错，也不要把 NaN 写进数据集
+            f.write(json.dumps(rec, ensure_ascii=False, allow_nan=False) + "\n")
 
 
 def write_stats_md(
@@ -228,14 +261,24 @@ def write_stats_md(
     lines.append(f"- 随机种子：`{cfg.seed}`")
     lines.append(f"- token 统计方式：`{df['token_count_method'].iloc[0]}`\n")
 
-    lines.append("## 1. 数据漏斗（清洗每一步淘汰了多少）\n")
-    lines.append("| 步骤 | 剩余样本数 | 本步淘汰 |")
-    lines.append("| :--- | ---: | ---: |")
-    prev = None
-    for k, v in funnel.items():
-        dropped = "" if prev is None else str(prev - v)
-        lines.append(f"| {k} | {v} | {dropped} |")
-        prev = v if k != "clean" else prev
+    lines.append("## 1. 数据漏斗（清洗每一步剩下多少条）\n")
+    lines.append("| 步骤 | 剩余样本数 | 本步淘汰 | 说明 |")
+    lines.append("| :--- | ---: | ---: | :--- |")
+    notes = {
+        "raw": "合成器原始产出（已含刻意注入的脏数据）",
+        "非空正文": "去除空白文本",
+        "型号在正文中": "型号是必填字段，正文里找不到说明标签不可信",
+        "长度在合理区间": "超短信息不全 / 超长（历史邮件线程）浪费显存",
+        "精确去重后": "完全相同的正文（重复投递），保留首条",
+        "近重复去重后": "同骨架 + 同公司 + 同型号（重复录入），保留首条",
+        "标签自洽": "is_urgent=True 但正文无加急措辞",
+        "token 长度合规": "prompt+target 超过 max_seq_length",
+    }
+    keys = list(funnel)
+    for i, k in enumerate(keys):
+        kept = funnel[k]
+        dropped = "" if i == 0 else str(funnel[keys[i - 1]] - kept)
+        lines.append(f"| {k} | {kept} | {dropped} | {notes.get(k, '')} |")
 
     lines.append("\n## 2. 切分结果\n")
     lines.append("| 数据集 | 样本数 | 模板族 | 平均 token | 最大 token |")
@@ -301,15 +344,17 @@ def main() -> None:
 
     print("[2/5] pandas 清洗 ...")
     df, funnel = clean(df)
-    for k, v in funnel.items():
-        print(f"      {k}: {v}")
+    keys = list(funnel)
+    for i, k in enumerate(keys):
+        dropped = "" if i == 0 else f"  (-{funnel[keys[i - 1]] - funnel[k]})"
+        print(f"      {k:<16} {funnel[k]:>5}{dropped}")
 
     print("[3/5] token 长度统计 ...")
     df = add_token_length(df, args.tokenizer, args.max_tokens)
-    n_before = len(df)
     df = df[~df["too_long"]].reset_index(drop=True)
-    funnel["drop_too_long"] = n_before - len(df)
-    print(f"      drop_too_long: {funnel['drop_too_long']}")
+    funnel["token 长度合规"] = len(df)
+    print(f"      {'token 长度合规':<16} {len(df):>5}  "
+          f"(-{funnel['标签自洽'] - len(df)})")
 
     print("[4/5] 按模板族 / 骨架严格切分 ...")
     splits = split_dataset(df, args.n_val, args.n_test_iid, args.n_test_ood, args.seed)

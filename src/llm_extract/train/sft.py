@@ -29,7 +29,8 @@ from transformers import (
     TrainingArguments,
 )
 
-from llm_extract.prompts import build_messages, build_user_prompt, SYSTEM_PROMPT
+from llm_extract.prompts import build_messages, build_target, build_user_prompt, SYSTEM_PROMPT
+from llm_extract.schema import InquiryRecord
 
 ROOT = Path(__file__).resolve().parents[3]
 IGNORE_INDEX = -100
@@ -94,6 +95,11 @@ class TrainConfig:
 # ──────────────────────────────────────────────────────────────────
 
 def load_jsonl(path: Path) -> list[dict[str, Any]]:
+    """读取数据集，并**从字段重建监督目标**。
+
+    数据集里不冗余存 `target_json`，避免"字段改了但 target 没同步"的隐患——
+    监督信号永远由 schema 现算，保证与评测口径完全一致。
+    """
     rows = []
     with path.open(encoding="utf-8") as f:
         for line in f:
@@ -102,6 +108,10 @@ def load_jsonl(path: Path) -> list[dict[str, Any]]:
                 rows.append(json.loads(line))
     if not rows:
         raise ValueError(f"{path} 为空")
+    for r in rows:
+        if "target_json" not in r:
+            payload = {k: r[k] for k in InquiryRecord.model_fields}
+            r["target_json"] = build_target(InquiryRecord.model_validate(payload))
     return rows
 
 

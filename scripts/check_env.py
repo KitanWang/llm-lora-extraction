@@ -49,7 +49,7 @@ def check_env() -> int:
     print(f"设备名    : {torch.cuda.get_device_name(dev)}")
     print(f"计算能力  : sm_{props.major}{props.minor}")
     print(f"显存      : {total_gib:.2f} GiB")
-    print(f"CUDA 版本 : torch={torch.version.cuda} / 驱动支持={torch.cuda.get_device_capability(dev)}")
+    print(f"CUDA 版本 : torch 编译于 CUDA {torch.version.cuda}")
 
     arch_list = getattr(torch.cuda, "get_arch_list", lambda: [])()
     if arch_list:
@@ -58,20 +58,27 @@ def check_env() -> int:
         if want not in arch_list:
             print(f"[WARN] 当前 torch 未包含 {want} 内核，可能回退到 JIT 编译或报 no kernel image")
 
-    section("4. 算力自检（一次矩阵乘）")
+    section("4. 算力自检（bf16 矩阵乘，含预热）")
     try:
-        a = torch.randn(2048, 2048, device="cuda", dtype=torch.bfloat16)
-        b = torch.randn(2048, 2048, device="cuda", dtype=torch.bfloat16)
-        torch.cuda.synchronize()
         import time
 
-        t0 = time.time()
-        for _ in range(5):
+        torch.backends.cuda.matmul.allow_tf32 = True
+        n = 4096
+        a = torch.randn(n, n, device="cuda", dtype=torch.bfloat16)
+        b = torch.randn(n, n, device="cuda", dtype=torch.bfloat16)
+        # 首次调用要初始化 cuBLAS 句柄并做内核选择，必须预热后再计时，
+        # 否则会得到一个低一个数量级的假结果。
+        for _ in range(10):
             _ = a @ b
         torch.cuda.synchronize()
-        dt = (time.time() - t0) / 5
-        tflops = 2 * 2048**3 / dt / 1e12
-        print(f"bf16 矩阵乘: {dt * 1000:.2f} ms/次 ≈ {tflops:.1f} TFLOPS")
+        t0 = time.time()
+        iters = 50
+        for _ in range(iters):
+            _ = a @ b
+        torch.cuda.synchronize()
+        dt = (time.time() - t0) / iters
+        tflops = 2 * n**3 / dt / 1e12
+        print(f"bf16 {n}³ 矩阵乘: {dt * 1000:.2f} ms/次 ≈ {tflops:.1f} TFLOPS")
         del a, b
         torch.cuda.empty_cache()
     except Exception as exc:  # noqa: BLE001
@@ -95,9 +102,9 @@ def check_env() -> int:
     section("6. 选型结论")
     print(f"可用显存 {total_gib:.1f} GiB：")
     if total_gib >= 6:
-        print("  ✅ Qwen2.5-1.5B-Instruct + LoRA (bf16)   —— 推荐作为主对照")
-    if total_gib >= 8 and bnb_ok:
-        print("  ✅ Qwen2.5-7B-Instruct   + QLoRA (NF4)   —— 7B 级别，需 bs=1 + grad ckpt")
+        print("  ✅ Qwen2.5-1.5B-Instruct + LoRA (bf16)   —— 推荐作为主对照（无量化误差）")
+    if total_gib >= 7.5 and bnb_ok:
+        print("  ⚠️  Qwen2.5-7B-Instruct   + QLoRA (NF4)   —— 可行但紧张，须 bs=1 + 梯度检查点")
     if total_gib >= 16 and bnb_ok:
         print("  ✅ Qwen2.5-7B-Instruct   + bf16 LoRA     —— 显存充裕时的更优解")
     if total_gib < 8:
@@ -109,7 +116,7 @@ def check_env() -> int:
                               "--format=csv,noheader"], capture_output=True, text=True)
         print(f"\nnvidia-smi: {out.stdout.strip()}")
 
-    return 0 if not bnb_ok else 0
+    return 0
 
 
 if __name__ == "__main__":
