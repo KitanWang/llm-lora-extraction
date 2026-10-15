@@ -67,6 +67,10 @@ class TrainConfig:
     load_in_4bit: bool = False     # True → QLoRA
     bnb_4bit_quant_type: str = "nf4"
     bnb_4bit_use_double_quant: bool = True
+    # 是否把 embed_tokens / lm_head 升到 fp32。
+    # 7B 在 8GB 卡上必须设 False：这两个矩阵各 1.02 GB(fp16)，
+    # 升级后变 2.04 GB，两份合计多占 2.04 GB，直接导致 OOM。
+    fp32_upcast_non_quantized: bool = True
     seed: int = 42
 
     lora_r: int = 16
@@ -254,13 +258,30 @@ def load_model_and_tokenizer(cfg: TrainConfig):
     model.config.use_cache = False
 
     if cfg.load_in_4bit:
-        # 关键：把量化模型的 LayerNorm/输出层升到 fp32，并开启输入梯度，
-        # 否则 LoRA 的梯度传不进 4bit 主干，loss 不会下降。
-        model = prepare_model_for_kbit_training(
-            model,
-            use_gradient_checkpointing=cfg.gradient_checkpointing,
-            gradient_checkpointing_kwargs={"use_reentrant": False},
-        )
+        if cfg.fp32_upcast_non_quantized:
+            # 官方推荐路径：把 LayerNorm / 输出层升到 fp32，数值最稳。
+            model = prepare_model_for_kbit_training(
+                model,
+                use_gradient_checkpointing=cfg.gradient_checkpointing,
+                gradient_checkpointing_kwargs={"use_reentrant": False},
+            )
+        else:
+            # ── 8 GB 显卡训 7B 的关键：不做 fp32 升级 ──────────────────
+            # prepare_model_for_kbit_training 会把 `embed_tokens` 和 `lm_head`
+            # 升到 fp32。对 7B 而言这两个都是 152064×3584 的大矩阵
+            # （tie_word_embeddings=False → 各一份、互不共享）：
+            #     fp16: 1.02 GB × 2 = 2.04 GB  →  fp32: 2.04 GB × 2 = 4.08 GB
+            # 实测常驻显存因此从 5.34 GiB 涨到 7.38 GiB，直接吃掉全部余量，
+            # 训练峰值 10.52 GiB（物理显存仅 7.96 GiB，靠 WSL 内存超售"假装"能跑，
+            # 代价是 110 秒/步，慢 8 倍）。
+            # 保持 fp16 后实测：常驻 5.34 GiB、训练峰值 6.05 GiB，
+            # loss 与梯度范数均为有限值，反向正常。
+            if cfg.gradient_checkpointing:
+                model.gradient_checkpointing_enable(
+                    gradient_checkpointing_kwargs={"use_reentrant": False}
+                )
+            # 仍需开启输入梯度，否则梯度传不进 4bit 主干
+            model.enable_input_require_grads()
     elif cfg.gradient_checkpointing:
         model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
 

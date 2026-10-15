@@ -1,0 +1,50 @@
+{
+  "model": "Qwen2.5-7B-Instruct",
+  "available_gib": 6.87,
+  "base_resident_gib": 5.34,
+  "trainable_params": 40370176,
+  "configs": [
+    {
+      "seq_len": 1024,
+      "grad_ckpt": true,
+      "real_len": 658,
+      "logits_to_keep": 77,
+      "n_samples": 8,
+      "micro_batch": 1,
+      "n_batches": 8,
+      "result": "ok",
+      "peak_allocated_gib": 6.04,
+      "peak_reserved_gib": 6.31,
+      "activations_gib": 0.7,
+      "sec_per_step": 1.88
+    },
+    {
+      "seq_len": 832,
+      "grad_ckpt": true,
+      "real_len": 658,
+      "logits_to_keep": 77,
+      "n_samples": 8,
+      "micro_batch": 1,
+      "n_batches": 8,
+      "result": "ok",
+      "peak_allocated_gib": 6.04,
+      "peak_reserved_gib": 6.31,
+      "activations_gib": 0.69,
+      "sec_per_step": 1.84
+    },
+    {
+      "seq_len": 768,
+      "grad_ckpt": true,
+      "real_len": 658,
+      "logits_to_keep": 77,
+      "n_samples": 8,
+      "micro_batch": 1,
+      "n_batches": 8,
+      "result": "ok",
+      "peak_allocated_gib": 6.04,
+      "peak_reserved_gib": 6.31,
+      "activations_gib": 0.69,
+      "sec_per_step": 1.82
+    }
+  ]
+}

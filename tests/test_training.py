@@ -301,3 +301,50 @@ class TestShippedConfigsUseMemoryOptimization:
                 pytest.skip(f"{name} 不存在")
             cfg = TrainConfig.from_yaml(p)
             assert cfg.logits_to_keep is True, f"{name} 未开启 logits_to_keep，7B 会 OOM"
+
+
+class TestMemoryCriticalConfig:
+    """8 GB 显卡训 7B 的两个必要条件，用测试钉死。
+
+    这两项都不是"改错了会报错"的配置——关掉之后训练照样跑、loss 照样降，
+    只是 7B 会悄悄溢出到主机内存（WSL 允许显存超售），速度慢 8 倍且不报警。
+    """
+
+    def test_7b_config_disables_fp32_upcast(self):
+        """7B 必须关闭 fp32 升级。
+
+        embed_tokens / lm_head 各 152064×3584，且 tie_word_embeddings=False
+        使它们互不共享。fp16 各 1.02 GB，升 fp32 后各 2.04 GB，
+        实测常驻显存 5.34 → 7.38 GiB，训练峰值 10.52 GiB > 物理显存 7.96 GiB。
+        """
+        from llm_extract.train.sft import TrainConfig
+
+        p = ROOT / "configs" / "qwen25-7b-qlora.yaml"
+        if not p.exists():
+            pytest.skip("配置不存在")
+        cfg = TrainConfig.from_yaml(p)
+        assert cfg.fp32_upcast_non_quantized is False, (
+            "7B 开启 fp32 升级会多占 2.04 GB 显存，8GB 卡必定溢出"
+        )
+        assert cfg.load_in_4bit is True
+        assert cfg.optim == "paged_adamw_8bit"
+        assert cfg.per_device_train_batch_size == 1
+
+    def test_small_models_keep_fp32_upcast_default(self):
+        """小模型默认保持官方推荐路径（数值最稳），只有 7B 才需要关闭。"""
+        from llm_extract.train.sft import TrainConfig
+
+        cfg = TrainConfig()
+        assert cfg.fp32_upcast_non_quantized is True
+
+    def test_7b_max_seq_length_covers_all_samples(self):
+        """max_seq_length 必须覆盖全量样本（实测最长 796 token）。"""
+        from llm_extract.train.sft import TrainConfig
+
+        p = ROOT / "configs" / "qwen25-7b-qlora.yaml"
+        if not p.exists():
+            pytest.skip("配置不存在")
+        cfg = TrainConfig.from_yaml(p)
+        assert cfg.max_seq_length >= 832, (
+            "实测全量样本最长 796 token，max_seq_length 低于 832 会丢样本"
+        )

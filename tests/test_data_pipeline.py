@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pandas as pd
 import pytest
@@ -20,6 +21,9 @@ from llm_extract.data.pipeline import (
 )
 from llm_extract.data.synth import IN_DIST_FAMILIES, OOD_FAMILIES, SynthConfig, generate
 from llm_extract.schema import FIELD_ORDER, InquiryRecord, normalize_company
+
+ROOT = Path(__file__).resolve().parents[1]
+TRAIN_FILE = ROOT / "data" / "processed" / "train.jsonl"
 
 
 @pytest.fixture(scope="module")
@@ -244,3 +248,48 @@ class TestJsonlRoundTrip:
             assert rec[f] is None, f"{f} 应当是 null 而不是 NaN"
         assert rec["quantity"] == 100
         assert rec["is_urgent"] is False
+
+
+class TestTokenLengthBudget:
+    """token 长度决定了 max_seq_length 能压到多低而不丢样本。
+
+    这是「显存不够时怎么办」的关键依据：如果降到 768 会丢掉一半数据，
+    那降级就不是免费选项；实测最长样本 749，说明降到 768 是**零代价**的。
+    用测试钉住这个结论，避免数据集改版后安全边界被悄悄突破。
+    """
+
+    @pytest.fixture(scope="class")
+    def lengths(self):
+        pytest.importorskip("transformers")
+        tok_path = ROOT / "models" / "Qwen2.5-0.5B-Instruct"
+        if not (tok_path / "tokenizer_config.json").exists():
+            pytest.skip("本地无 tokenizer")
+        from transformers import AutoTokenizer
+
+        from llm_extract.prompts import build_messages, build_target
+
+        tok = AutoTokenizer.from_pretrained(str(tok_path), trust_remote_code=True)
+        n = 0
+        out = []
+        with TRAIN_FILE.open(encoding="utf-8") as f:
+            for line in f:
+                r = json.loads(line)
+                payload = {k: r[k] for k in InquiryRecord.model_fields}
+                msg = "".join(m["content"] for m in build_messages(r["text"]))
+                out.append(len(tok(msg + build_target(InquiryRecord.model_validate(payload)))
+                               ["input_ids"]))
+                n += 1
+                if n >= 120:
+                    break
+        return out
+
+    def test_max_length_within_768(self, lengths):
+        """最长样本应显著低于 768，保证显存紧张时可安全降级。"""
+        assert max(lengths) <= 768, (
+            f"最长样本 {max(lengths)} token 超过 768，"
+            "降级 max_seq_length 会丢数据，需要重新评估显存策略"
+        )
+
+    def test_lengths_are_reasonably_spread(self, lengths):
+        """长度不能全都一样（那样合成器的多样性是假的）。"""
+        assert max(lengths) - min(lengths) > 50

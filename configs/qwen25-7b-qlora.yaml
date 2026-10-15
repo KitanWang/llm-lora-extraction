@@ -28,6 +28,12 @@ optim: paged_adamw_8bit                  # 优化器状态分页到 CPU，避免
 load_in_4bit: true
 bnb_4bit_quant_type: nf4
 bnb_4bit_use_double_quant: true
+# 7B 在 8GB 卡上必须为 false：不把 embed_tokens / lm_head 升到 fp32。
+# 这两者各 152064×3584（tie_word_embeddings=false，互不共享），
+# fp16 各 1.02 GB，升 fp32 后各 2.04 GB —— 合计多占 2.04 GB，必然 OOM。
+# 实测：升级→训练峰值 10.52 GiB（超物理显存，靠内存超售卖命，110s/step）；
+#       不升级→峰值 6.05 GiB，可正常训练。
+fp32_upcast_non_quantized: false
 
 lora_r: 16
 lora_alpha: 32
