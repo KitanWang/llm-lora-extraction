@@ -43,3 +43,9 @@ lora_target_modules:
 
 seed: 42
 report_to: none
+
+# 只对答案位置计算 logits（lm_head 输出 [B, T, 151936]，T=1024 时仅此一项就 ~311MB）。
+# 0.5B QLoRA 实测：开启前后训练峰值 3.40 GiB → 1.43 GiB（降 58%），
+# 且监督 token 数与 loss 完全等价（相对差 9.4e-08，bf16 精度内）。
+# 这是 7B 能在 8 GB 卡上训练的前提，不要关闭。
+logits_to_keep: true

@@ -283,3 +283,21 @@ class TestLogitsToKeep:
              "labels": [IGNORE_INDEX] * 3},
         ])
         assert batch["input_ids"].shape[0] == 1
+
+
+class TestShippedConfigsUseMemoryOptimization:
+    """出货配置必须开启 logits_to_keep。
+
+    这是"改动被回滚了也不会有人发现"的那类配置：关掉之后训练照样跑、
+    loss 照样降，只是 7B 会在某一步突然 OOM。所以用测试钉住。
+    """
+
+    def test_all_configs_enable_logits_to_keep(self):
+        from llm_extract.train.sft import TrainConfig
+
+        for name in ("smoke.yaml", "qwen25-1.5b-lora.yaml", "qwen25-7b-qlora.yaml"):
+            p = ROOT / "configs" / name
+            if not p.exists():
+                pytest.skip(f"{name} 不存在")
+            cfg = TrainConfig.from_yaml(p)
+            assert cfg.logits_to_keep is True, f"{name} 未开启 logits_to_keep，7B 会 OOM"

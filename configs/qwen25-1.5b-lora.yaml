@@ -39,3 +39,6 @@ lora_target_modules:
 
 seed: 42
 report_to: none
+
+# 只对答案位置算 logits（实测省 58% 训练显存，与完整计算数学等价）
+logits_to_keep: true
