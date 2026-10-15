@@ -67,6 +67,13 @@ def main() -> None:
     ap.add_argument("--batch-size", type=int, default=1)
     ap.add_argument("--grad-accum", type=int, default=16)
     ap.add_argument("--out", type=Path, default=None)
+    ap.add_argument(
+        "--seq-ladder",
+        type=str,
+        default=None,
+        help="逗号分隔的序列长度阶梯，如 1024,896,768,640。"
+             "用于在 OOM 时立刻找到本机可用的最大长度（只跑训练那一步，不重复加载模型）",
+    )
     args = ap.parse_args()
 
     if not torch.cuda.is_available():
@@ -153,10 +160,14 @@ def main() -> None:
     print(f"  可训练参数 {n_train:,} / {n_total:,} = {n_train / n_total * 100:.4f}%")
 
     # 构造一个 max_seq_length 长度的真实训练样本（最坏情况）
-    ids = torch.randint(100, 30000, (args.batch_size, args.seq_len), device="cuda")
-    attn = torch.ones_like(ids)
-    labels = ids.clone()
-    labels[:, : int(args.seq_len * 0.8)] = -100   # 模拟 prompt mask
+    def make_batch(seq_len: int):
+        ids = torch.randint(100, 30000, (args.batch_size, seq_len), device="cuda")
+        attn = torch.ones_like(ids)
+        lbl = ids.clone()
+        lbl[:, : int(seq_len * 0.8)] = -100   # 模拟 prompt mask
+        return ids, attn, lbl
+
+    ids, attn, labels = make_batch(args.seq_len)
 
     model.train()
     reset_peak()
@@ -166,10 +177,14 @@ def main() -> None:
         loss.backward()
         results.append(report("3. 前向+反向",
                               {"seq_len": args.seq_len, "micro_bs": args.batch_size,
-                               "loss": round(float(loss), 4)}))
+                               "loss": round(float(loss.detach()), 4)}))
     except torch.cuda.OutOfMemoryError:
-        results.append({"stage": "3. 前向+反向", "error": "OOM"})
-        print("  ❌ OOM：这个配置下训练跑不起来")
+        results.append({"stage": "3. 前向+反向", "error": "OOM", "seq_len": args.seq_len})
+        print(f"  ❌ OOM（seq_len={args.seq_len}）：训练跑不起来")
+        del ids, attn, labels
+        reset_peak()
+        if args.seq_ladder:
+            _run_ladder(model, args, results)
         _dump(results, name, mode, args, model_path)
         return
 
@@ -204,6 +219,42 @@ def main() -> None:
         print(f"⚠️  余量不足（{gib(total) - peak:.2f} GiB），训练时可能因碎片化 OOM")
     print("=" * 78)
     _dump(results, name, mode, args, model_path)
+
+
+def _run_ladder(model, args, results: list[dict]) -> None:
+    """模型已加载的前提下，逐个序列长度试训练，找到本机能跑的最大长度。
+
+    比"重新加载模型再试"快得多（7B 加载一次要几十秒），
+    而且能直接给出「该把 max_seq_length 配成多少」这个可执行结论。
+    """
+    print("\n  序列长度阶梯测试（找本机可用的最大长度）...")
+    ladder = [int(x) for x in args.seq_ladder.split(",") if x.strip()]
+    best = None
+    for seq_len in ladder:
+        if seq_len >= args.seq_len:
+            continue
+        reset_peak()
+        try:
+            ids = torch.randint(100, 30000, (args.batch_size, seq_len), device="cuda")
+            attn = torch.ones_like(ids)
+            lbl = ids.clone()
+            lbl[:, : int(seq_len * 0.8)] = -100
+            out = model(input_ids=ids, attention_mask=attn, labels=lbl)
+            out.loss.backward()
+            peak = torch.cuda.max_memory_allocated()
+            row = report(f"3b. seq_len={seq_len}", {"fits": True})
+            results.append({**row, "stage": f"3b. seq_len={seq_len}", "seq_len": seq_len})
+            best = seq_len
+            del ids, attn, lbl, out
+            model.zero_grad(set_to_none=True)
+            torch.cuda.empty_cache()
+        except torch.cuda.OutOfMemoryError:
+            results.append({"stage": f"3b. seq_len={seq_len}", "seq_len": seq_len, "error": "OOM"})
+            print(f"  ❌ seq_len={seq_len} 也放不下")
+            model.zero_grad(set_to_none=True)
+            torch.cuda.empty_cache()
+    if best:
+        print(f"\n  ➜ 建议 max_seq_length 配为 {best}（或更小）")
 
 
 def _dump(results: list[dict], name: str, mode: str, args, model_path: str) -> None:
