@@ -1,0 +1,41 @@
+# 主力配置 A：Qwen2.5-1.5B-Instruct + LoRA（bf16，不量化）
+#
+# 选它的理由：1.5B 在 8GB 显存里可以用 bf16 全精度主干训练，
+# 是「基座 vs 微调后」对比中最干净的对照组（没有量化误差的干扰）。
+model_name_or_path: Qwen/Qwen2.5-1.5B-Instruct
+train_file: data/processed/train.jsonl
+val_file: data/processed/val.jsonl
+output_dir: outputs/qwen25-1.5b-lora
+
+max_seq_length: 1024
+per_device_train_batch_size: 4
+per_device_eval_batch_size: 4
+gradient_accumulation_steps: 4          # 等效 batch size = 16
+learning_rate: 2.0e-4
+num_train_epochs: 3.0
+warmup_ratio: 0.05
+lr_scheduler_type: cosine
+max_grad_norm: 1.0
+logging_steps: 10
+save_strategy: epoch
+eval_strategy: epoch
+
+bf16: true
+gradient_checkpointing: true
+optim: adamw_torch
+load_in_4bit: false
+
+lora_r: 16
+lora_alpha: 32
+lora_dropout: 0.05
+lora_target_modules:
+  - q_proj
+  - k_proj
+  - v_proj
+  - o_proj
+  - gate_proj
+  - up_proj
+  - down_proj
+
+seed: 42
+report_to: none

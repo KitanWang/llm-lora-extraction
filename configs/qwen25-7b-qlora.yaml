@@ -1,0 +1,45 @@
+# 主力配置 B：Qwen2.5-7B-Instruct + QLoRA（NF4 4bit 量化主干）
+#
+# 这是「单张 8GB 消费级显卡微调 7B」的那条路：
+#   - 主干 4bit NF4 量化，约 4.5GB 权重
+#   - LoRA adapter 以 bf16 训练，可训练参数占比 <1%
+#   - 配合 gradient checkpointing + paged_adamw_8bit 把优化器状态压到可接受范围
+model_name_or_path: Qwen/Qwen2.5-7B-Instruct
+train_file: data/processed/train.jsonl
+val_file: data/processed/val.jsonl
+output_dir: outputs/qwen25-7b-qlora
+
+max_seq_length: 1024
+per_device_train_batch_size: 1           # 7B 在 8GB 卡上必须压到 1
+per_device_eval_batch_size: 1
+gradient_accumulation_steps: 16          # 等效 batch size = 16
+learning_rate: 1.5e-4
+num_train_epochs: 2.0
+warmup_ratio: 0.05
+lr_scheduler_type: cosine
+max_grad_norm: 1.0
+logging_steps: 5
+save_strategy: epoch
+eval_strategy: epoch
+
+bf16: true
+gradient_checkpointing: true
+optim: paged_adamw_8bit                  # 优化器状态分页到 CPU，避免 OOM
+load_in_4bit: true
+bnb_4bit_quant_type: nf4
+bnb_4bit_use_double_quant: true
+
+lora_r: 16
+lora_alpha: 32
+lora_dropout: 0.05
+lora_target_modules:
+  - q_proj
+  - k_proj
+  - v_proj
+  - o_proj
+  - gate_proj
+  - up_proj
+  - down_proj
+
+seed: 42
+report_to: none

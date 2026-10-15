@@ -1,0 +1,21 @@
+# 冒烟配置：只跑 60 步，验证「数据 → 训练 → 保存 adapter」链路通畅。
+# 用法：uv run python -m llm_extract.train.sft --config configs/smoke.yaml
+model_name_or_path: Qwen/Qwen2.5-0.5B-Instruct
+train_file: data/processed/train.jsonl
+val_file: data/processed/val.jsonl
+output_dir: outputs/smoke-0.5b
+
+max_seq_length: 768
+per_device_train_batch_size: 2
+per_device_eval_batch_size: 2
+gradient_accumulation_steps: 2
+learning_rate: 2.0e-4
+num_train_epochs: 1.0
+logging_steps: 5
+save_strategy: "no"
+eval_strategy: "no"
+
+bf16: true
+gradient_checkpointing: true
+load_in_4bit: false
+max_train_samples: 64

@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "llm-extract"
+version = "0.1.0"
+description = "结构化信息抽取的 LoRA/QLoRA 微调与评测对比实验"
+requires-python = ">=3.10"
+dependencies = [
+    "pandas>=2.2",
+    "numpy>=1.26",
+    "pydantic>=2.9",
+    "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+train = [
+    "torch>=2.7",
+    "transformers>=4.46,<5",
+    "peft>=0.13",
+    "trl>=0.13,<1.0",
+    "datasets>=3.0",
+    "accelerate>=1.0",
+    "bitsandbytes>=0.45",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-q"
