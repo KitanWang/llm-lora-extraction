@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -30,6 +31,27 @@ from llm_extract.prompts import build_messages, build_target
 from llm_extract.schema import FIELD_ORDER, InquiryRecord, normalize_text
 
 ROOT = Path(__file__).resolve().parents[3]
+
+# 加急语义的线索词。用于两处：
+#   1. is_urgent=True 的样本，正文必须真的含这些词；
+#   2. is_urgent=False 的样本，**被引用的历史段落**不能含这些词（见 _has_quoted_urgency）。
+URGENT_KW = "急|尽快|越快越好|压缩|催"
+
+# 引用段落的标记：这些行属于「上一轮沟通」而非本次要求
+_QUOTE_MARKERS = ("以下为对方原邮件", "历史邮件", "上一轮", "> ", "转发的原邮件")
+
+
+def _has_quoted_urgency(text: str) -> bool:
+    """判断正文的**引用段落**里是否含加急词。
+
+    只检查被标记为引用的行，避免误伤正文里刻意设计的否定表述
+    （「不着急」「别急着报」——那些是让模型判 False 的合理干扰项）。
+    """
+    for line in text.splitlines():
+        s = line.strip()
+        if s and any(m in s for m in _QUOTE_MARKERS) and re.search(URGENT_KW, s):
+            return True
+    return False
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -108,11 +130,18 @@ def clean(df: pd.DataFrame, min_chars: int = 40, max_chars: int = 900) -> tuple[
     df = df.drop_duplicates(subset=["_near_key"], keep="first")
     step("近重复去重后")
 
-    # (f) 标签自洽性：is_urgent 为 True 时正文应含加急线索（防止合成器逻辑错位）
-    urgent_kw = "急|尽快|优先|越快越好|压缩|催"
-    bad_urgent = df["is_urgent"] & ~df["text"].str.contains(urgent_kw, regex=True)
-    df = df[~bad_urgent]
-    step("标签自洽")
+    # (f) 标签自洽性：is_urgent=True 时正文应含加急线索（防止合成器逻辑错位）
+    df = df[~(df["is_urgent"] & ~df["text"].str.contains(URGENT_KW, regex=True))]
+    step("加急标注自洽")
+
+    # (g) 引用段落污染：is_urgent=False 时，正文里**被引用的历史邮件/历史沟通**
+    #     不应含加急词。这类文本属于「上一轮的内容」，不代表本次要求，
+    #     但模型无法区分——会让标注变成噪声（模型判 True 反而是对的）。
+    #     实测：早期版本 OOD 集有 27 条因此矛盾，is_urgent 误报 18 条（12%）。
+    #     注意这里只排查**引用行**，不碰「不着急」这类否定表述——
+    #     后者是刻意设计的干扰项，模型本就应该判 False。
+    df = df[~(~df["is_urgent"] & df["text"].apply(_has_quoted_urgency))]
+    step("无引用加急污染")
 
     df = df.drop(columns=["_near_key"]).reset_index(drop=True)
     return df, funnel
@@ -271,7 +300,8 @@ def write_stats_md(
         "长度在合理区间": "超短信息不全 / 超长（历史邮件线程）浪费显存",
         "精确去重后": "完全相同的正文（重复投递），保留首条",
         "近重复去重后": "同骨架 + 同公司 + 同型号（重复录入），保留首条",
-        "标签自洽": "is_urgent=True 但正文无加急措辞",
+        "加急标注自洽": "is_urgent=True 但正文无加急措辞",
+        "无引用加急污染": "is_urgent=False 但被引用的历史段落含加急词（标注噪声）",
         "token 长度合规": "prompt+target 超过 max_seq_length",
     }
     keys = list(funnel)
@@ -352,9 +382,9 @@ def main() -> None:
     print("[3/5] token 长度统计 ...")
     df = add_token_length(df, args.tokenizer, args.max_tokens)
     df = df[~df["too_long"]].reset_index(drop=True)
+    prev = funnel[list(funnel)[-1]]
     funnel["token 长度合规"] = len(df)
-    print(f"      {'token 长度合规':<16} {len(df):>5}  "
-          f"(-{funnel['标签自洽'] - len(df)})")
+    print(f"      {'token 长度合规':<16} {len(df):>5}  (-{prev - len(df)})")
 
     print("[4/5] 按模板族 / 骨架严格切分 ...")
     splits = split_dataset(df, args.n_val, args.n_test_iid, args.n_test_ood, args.seed)

@@ -127,8 +127,8 @@ class TestClean:
         })
         out, funnel = clean(df, min_chars=10, max_chars=500)
         assert out.empty
-        assert funnel["标签自洽"] == 0
-        assert funnel["近重复去重后"] - funnel["标签自洽"] == 1, "应淘汰 1 条"
+        assert funnel["加急标注自洽"] == 0
+        assert funnel["近重复去重后"] - funnel["加急标注自洽"] == 1, "应淘汰 1 条"
 
     def test_length_filter(self):
         # 正文必须包含 product_model，否则会先被「型号不在正文」规则淘汰，
@@ -293,3 +293,74 @@ class TestTokenLengthBudget:
     def test_lengths_are_reasonably_spread(self, lengths):
         """长度不能全都一样（那样合成器的多样性是假的）。"""
         assert max(lengths) - min(lengths) > 50
+
+
+class TestLabelTextConsistency:
+    """标注与正文必须自洽 —— 否则测的是标注噪声，不是模型能力。
+
+    背景（真实踩坑）：合成器曾在 `quote_reply` 模板里硬编码一句
+    「（以下为对方原邮件）关于交期，我们希望越快越好」。
+    它属于**被引用的历史邮件**，但模型无法区分「本次要求」与「历史引用」，
+    于是把 is_urgent 判成 True —— 而标注是 False。
+    实测 OOD 集 150 条里 18 条（12%）因此判错，全部由这一句造成。
+    """
+
+    def test_no_quoted_urgency_in_non_urgent_samples(self, raw_df):
+        from llm_extract.data.pipeline import _has_quoted_urgency
+
+        bad = raw_df[(raw_df["is_urgent"] == False)  # noqa: E712
+                     & raw_df["text"].apply(_has_quoted_urgency)]
+        assert bad.empty, (
+            f"{len(bad)} 条样本 is_urgent=False 但引用段落含加急词，"
+            "会造成标注噪声"
+        )
+
+    def test_negation_distractors_are_preserved(self, raw_df):
+        """「不着急」这类否定表述是**刻意设计的干扰项**，不能被误删。
+
+        修引用污染时很容易用力过猛，把所有含「急」的文本都清掉，
+        那样 is_urgent 就退化成一个查关键词的简单任务，失去评测价值。
+        """
+        neg = raw_df[raw_df["text"].str.contains(
+            "不着急|不用加急|非加急|不催|别急着报", regex=True)]
+        assert len(neg) > 0, "否定表述干扰项被清空了，is_urgent 会退化成关键词匹配"
+
+    def test_urgent_true_always_has_urgent_wording(self, raw_df):
+        """is_urgent=True 的样本，正文必须真的看得出加急。"""
+        urgent = raw_df[raw_df["is_urgent"]]
+        assert len(urgent) > 0
+        assert urgent["text"].str.contains("急|尽快|越快越好|压缩|催").all()
+
+    def test_nullable_fields_have_no_strong_textual_evidence(self, raw_df):
+        """标注为 null 的字段，正文里不该有该字段的明确取值。
+
+        以 delivery_date 为例：标注 null 时，正文不应出现明确的**交货**日期要求。
+
+        ⚠️ 必须排除付款账期：「对账后 60 天内付清」说的是 payment_terms，不是交期。
+        早期版本用宽松的 `\\d+\\s*天[内之]` 匹配，把 3 条这类样本误判为
+        「标注漏了交期」——实际是正则写得太宽。这类假阳性会诱导人把好数据改坏，
+        所以宁可把正则写细，也不要让它误报。
+        """
+        import re
+
+        # 「N 天内交货/发货/到货」才是交期表述；「X月X日前」也是
+        deliver_re = re.compile(
+            r"(\d+\s*天[内之]?\s*(交货|发货|到货|交期))"
+            r"|((\d{1,2})月(\d{1,2})[日号]\s*前)"
+        )
+        pay_re = re.compile(r"付款|账期|月结|付清|结清|定金|尾款|预付|货到付款|款到")
+
+        def has_delivery_requirement(text: str) -> bool:
+            for sent in re.split(r"[。\n]", text):
+                if deliver_re.search(sent) and not pay_re.search(sent):
+                    return True
+            return False
+
+        null_rows = raw_df[raw_df["delivery_date"].isna()]
+        if len(null_rows) == 0:
+            pytest.skip("没有 delivery_date 为空的样本")
+        bad = null_rows[null_rows["text"].apply(has_delivery_requirement)]
+        assert bad.empty, (
+            f"{len(bad)} 条样本 delivery_date 标注为 null，"
+            "但正文含明确的交付日期要求"
+        )
