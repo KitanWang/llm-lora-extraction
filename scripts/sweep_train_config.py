@@ -37,6 +37,8 @@ def main() -> None:
     ap.add_argument("--micro-batch", type=int, default=1,
                     help="必须与 per_device_train_batch_size 一致，否则测的不是生产配置")
     ap.add_argument("--steps", type=int, default=3)
+    ap.add_argument("--grad-accum", type=int, default=16,
+                    help="用于把 micro-batch 耗时换算成训练 step 耗时")
     ap.add_argument("--out", type=Path, default=None)
     ap.add_argument("--fp32-upcast", action="store_true",
                     help="启用官方 fp32 升级（用于对比它多占多少显存）")
@@ -197,16 +199,28 @@ def main() -> None:
         torch.cuda.empty_cache()
 
     # ── 估算训练时长 ──
+    # ⚠️ 单位换算容易错：本脚本测的是「**1 个 micro-batch** 的前向+反向」，
+    # 而 Trainer 进度条上的 1 个 step = gradient_accumulation_steps 个 micro-batch。
+    # 曾经写成 `steps * sec * accum / n_samples`，把时长低估了约 8 倍。
+    # 正确算法：每 epoch 的 micro-batch 数 = 训练样本数 / micro_batch。
+    train_file = ROOT / "data/processed/train.jsonl"
+    n_train = sum(1 for _ in train_file.open(encoding="utf-8")) if train_file.exists() else 1584
+    accum = args.grad_accum
     print()
     print("=" * 74)
-    print("训练时长估算（1584 条训练样本，等效 batch=16 → 每 epoch 99 步）")
+    print(f"训练时长估算（训练样本 {n_train} 条，micro_batch={args.micro_batch}，"
+          f"梯度累积={accum} → 每 epoch {n_train // (args.micro_batch * accum)} 步）")
     print("=" * 74)
     for r in results:
         if r.get("result") != "ok":
             continue
-        per_epoch = 99 * r["sec_per_step"] * 16 / max(1, r["n_samples"])
+        micro_per_epoch = n_train / r["micro_batch"]
+        sec_per_epoch = micro_per_epoch * r["sec_per_step"]
+        steps_per_epoch = n_train // (r["micro_batch"] * accum)
         print(f"  seq_len={r['seq_len']:<5} gc={int(r['grad_ckpt'])}  "
-              f"{r['sec_per_step']:.2f}s/step → 2 epoch 约 {per_epoch*2/60:.0f} 分钟")
+              f"{r['sec_per_step']:.2f}s/micro-batch × {micro_per_epoch:.0f} = "
+              f"{sec_per_epoch/60:.0f} min/epoch  "
+              f"({steps_per_epoch} steps/epoch, {sec_per_epoch/steps_per_epoch:.1f}s/step)")
 
     out = args.out or (ROOT / "reports" / "sweep_7b_config.json")
     out.parent.mkdir(parents=True, exist_ok=True)
