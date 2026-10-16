@@ -16,6 +16,12 @@ log() { echo "[$(date '+%m-%d %H:%M:%S')] $*" | tee -a "$LOG"; }
 
 run_eval() {
   local model="$1" adapter="$2" dataset="$3" tag="$4" bs="$5" extra="${6:-}"
+  # 幂等：已有汇总结果则跳过。7B 单组评测约 30 分钟，断点续跑时必须能跳过
+  # 已完成的组，否则每次重跑都要从头再来（这个坑踩过一次）。
+  if [ -f "reports/summary_$tag.json" ] && [ "${FORCE:-0}" != "1" ]; then
+    log "跳过 $tag（已有结果；FORCE=1 可强制重跑）"
+    return 0
+  fi
   log "评测 $tag  (model=$(basename "$model") adapter=${adapter:-无} dataset=$dataset bs=$bs)"
   $PY -m llm_extract.evaluate.run_eval \
       --model "$model" ${adapter:+--adapter "$adapter"} \
@@ -43,9 +49,16 @@ if [ "$STAGE" = "all" ] || [ "$STAGE" = "1.5b" ]; then
 fi
 
 if [ "$STAGE" = "all" ] || [ "$STAGE" = "7b-train" ]; then
-  log "===== 7B QLoRA 训练 ====="
-  $PY -m llm_extract.train.sft --config configs/qwen25-7b-qlora.yaml >> "$LOG" 2>&1
-  if [ $? -ne 0 ]; then log "❌ 7B 训练失败"; else log "✅ 7B 训练完成"; fi
+  # 幂等：已有 adapter 就跳过训练。7B 训练约 1.8 小时，
+  # 若因误用 STAGE=all 而重复训练，代价极高（这个坑踩过一次）。
+  if [ -f "outputs/qwen25-7b-qlora/final_adapter/adapter_model.safetensors" ] \
+     && [ "${FORCE:-0}" != "1" ]; then
+    log "跳过 7B 训练（已有 adapter；FORCE=1 可强制重训）"
+  else
+    log "===== 7B QLoRA 训练 ====="
+    $PY -m llm_extract.train.sft --config configs/qwen25-7b-qlora.yaml >> "$LOG" 2>&1
+    if [ $? -ne 0 ]; then log "❌ 7B 训练失败"; else log "✅ 7B 训练完成"; fi
+  fi
 fi
 
 if [ "$STAGE" = "all" ] || [ "$STAGE" = "7b-eval" ]; then

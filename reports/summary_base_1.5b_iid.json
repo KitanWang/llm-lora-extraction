@@ -1,0 +1,90 @@
+{
+  "n": 200,
+  "json_valid_rate": 1.0,
+  "schema_valid_rate": 0.605,
+  "exact_match_rate": 0.125,
+  "field_acc": {
+    "customer_name": 0.715,
+    "product_model": 0.99,
+    "quantity": 0.915,
+    "unit_price": 0.86,
+    "currency": 0.965,
+    "delivery_date": 0.61,
+    "payment_terms": 0.53,
+    "is_urgent": 0.855,
+    "contact_phone": 0.865
+  },
+  "hallucination_rate": {
+    "customer_name": 0.8620689655172413,
+    "quantity": 0.3181818181818182,
+    "unit_price": 0.18518518518518517,
+    "delivery_date": 0.13793103448275862,
+    "payment_terms": 0.6428571428571429,
+    "contact_phone": 0.3111111111111111
+  },
+  "omission_rate": {
+    "customer_name": 0.0,
+    "product_model": 0.0,
+    "quantity": 0.0,
+    "unit_price": 0.0547945205479452,
+    "currency": 0.02,
+    "delivery_date": 0.0,
+    "payment_terms": 0.0,
+    "is_urgent": 0.095,
+    "contact_phone": 0.03225806451612903
+  },
+  "enum_confusion": {
+    "payment_terms": {
+      "None -> 款到发货": 23,
+      "货到付款 -> 款到发货": 11,
+      "预付全款 -> 全额预付再排产": 7,
+      "月结30天 -> 月结一个月": 6,
+      "款到发货 -> 货款到了我们就发货": 6,
+      "货到付款 -> COD": 6,
+      "月结60天 -> 月结两个月": 3,
+      "货到付款 -> 货到验收后付款": 3
+    },
+    "currency": {
+      "CNY -> None": 4,
+      "EUR -> CNY": 2,
+      "EUR -> USD": 1
+    }
+  },
+  "by_template_family": {
+    "bullet_list": {
+      "n": 43,
+      "schema_valid_rate": 0.6744186046511628,
+      "exact_match_rate": 0.16279069767441862,
+      "avg_field_acc": 0.8294573643410852
+    },
+    "email_formal": {
+      "n": 60,
+      "schema_valid_rate": 0.6,
+      "exact_match_rate": 0.11666666666666667,
+      "avg_field_acc": 0.8055555555555556
+    },
+    "im_chat": {
+      "n": 59,
+      "schema_valid_rate": 0.5423728813559322,
+      "exact_match_rate": 0.1016949152542373,
+      "avg_field_acc": 0.7947269303201506
+    },
+    "mixed_informal": {
+      "n": 38,
+      "schema_valid_rate": 0.631578947368421,
+      "exact_match_rate": 0.13157894736842105,
+      "avg_field_acc": 0.827485380116959
+    }
+  },
+  "schema_error_examples": {
+    "1 validation error for InquiryRecord": 73,
+    "2 validation errors for InquiryRecord": 4,
+    "3 validation errors for InquiryRecord": 2
+  },
+  "tag": "base_1.5b_iid",
+  "model": "models/Qwen2.5-1.5B-Instruct",
+  "adapter": null,
+  "elapsed_sec": 215.7,
+  "sec_per_sample": 1.079,
+  "peak_gpu_gib": 3.845
+}

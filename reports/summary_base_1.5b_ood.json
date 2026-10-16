@@ -1,0 +1,76 @@
+{
+  "n": 150,
+  "json_valid_rate": 1.0,
+  "schema_valid_rate": 0.7066666666666667,
+  "exact_match_rate": 0.07333333333333333,
+  "field_acc": {
+    "customer_name": 0.5933333333333334,
+    "product_model": 1.0,
+    "quantity": 0.9133333333333333,
+    "unit_price": 0.7866666666666666,
+    "currency": 0.9666666666666667,
+    "delivery_date": 0.49333333333333335,
+    "payment_terms": 0.5333333333333333,
+    "is_urgent": 0.8333333333333334,
+    "contact_phone": 0.9133333333333333
+  },
+  "hallucination_rate": {
+    "customer_name": 1.0,
+    "quantity": 0.14285714285714285,
+    "unit_price": 0.35714285714285715,
+    "delivery_date": 0.6875,
+    "payment_terms": 0.8,
+    "contact_phone": 0.3333333333333333
+  },
+  "omission_rate": {
+    "customer_name": 0.0,
+    "product_model": 0.0,
+    "quantity": 0.0,
+    "unit_price": 0.05319148936170213,
+    "currency": 0.0,
+    "delivery_date": 0.007462686567164179,
+    "payment_terms": 0.02608695652173913,
+    "is_urgent": 0.06666666666666667,
+    "contact_phone": 0.006944444444444444
+  },
+  "enum_confusion": {
+    "payment_terms": {
+      "None -> 款到发货": 19,
+      "货到付款 -> 款到发货": 9,
+      "None -> 预付全款": 7,
+      "预付全款 -> 全额预付再排产": 4,
+      "货到付款 -> 货到验收后付款": 3,
+      "月结60天 -> 月结两个月": 3,
+      "月结60天 -> 款到发货": 3,
+      "货到付款 -> None": 3
+    },
+    "currency": {
+      "EUR -> CNY": 3,
+      "USD -> CNY": 2
+    }
+  },
+  "by_template_family": {
+    "phone_transcript": {
+      "n": 59,
+      "schema_valid_rate": 0.7627118644067796,
+      "exact_match_rate": 0.15254237288135594,
+      "avg_field_acc": 0.800376647834275
+    },
+    "quote_reply": {
+      "n": 91,
+      "schema_valid_rate": 0.6703296703296703,
+      "exact_match_rate": 0.02197802197802198,
+      "avg_field_acc": 0.7692307692307693
+    }
+  },
+  "schema_error_examples": {
+    "1 validation error for InquiryRecord": 41,
+    "2 validation errors for InquiryRecord": 3
+  },
+  "tag": "base_1.5b_ood",
+  "model": "models/Qwen2.5-1.5B-Instruct",
+  "adapter": null,
+  "elapsed_sec": 132.1,
+  "sec_per_sample": 0.881,
+  "peak_gpu_gib": 3.868
+}
