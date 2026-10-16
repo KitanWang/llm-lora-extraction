@@ -2,12 +2,12 @@
 #
 # 选它的理由：1.5B 在 8GB 显存里可以用 bf16 全精度主干训练，
 # 是「基座 vs 微调后」对比中最干净的对照组（没有量化误差的干扰）。
-model_name_or_path: Qwen/Qwen2.5-1.5B-Instruct
+model_name_or_path: models/Qwen2.5-1.5B-Instruct
 train_file: data/processed/train.jsonl
 val_file: data/processed/val.jsonl
 output_dir: outputs/qwen25-1.5b-lora
 
-max_seq_length: 1024
+max_seq_length: 832   # 全量实测最长 796 token，832 可 100% 覆盖
 per_device_train_batch_size: 4
 per_device_eval_batch_size: 4
 gradient_accumulation_steps: 4          # 等效 batch size = 16

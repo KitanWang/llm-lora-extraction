@@ -4,12 +4,12 @@
 #   - 主干 4bit NF4 量化，约 4.5GB 权重
 #   - LoRA adapter 以 bf16 训练，可训练参数占比 <1%
 #   - 配合 gradient checkpointing + paged_adamw_8bit 把优化器状态压到可接受范围
-model_name_or_path: Qwen/Qwen2.5-7B-Instruct
+model_name_or_path: models/Qwen2.5-7B-Instruct
 train_file: data/processed/train.jsonl
 val_file: data/processed/val.jsonl
 output_dir: outputs/qwen25-7b-qlora
 
-max_seq_length: 1024
+max_seq_length: 832   # 全量实测最长 796 token，832 可 100% 覆盖
 per_device_train_batch_size: 1           # 7B 在 8GB 卡上必须压到 1
 per_device_eval_batch_size: 1
 gradient_accumulation_steps: 16          # 等效 batch size = 16
