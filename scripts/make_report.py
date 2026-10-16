@@ -68,7 +68,10 @@ def main() -> None:
         if "_model" not in s:
             continue
         models.setdefault(s["_model"], {}).setdefault(s["_split"], {})[s["_variant"]] = s
-    model_order = sorted(models, key=lambda m: float(m.rstrip("b")))
+    def _size(m: str) -> float:
+        return float(m.rstrip("bB"))
+
+    model_order = sorted(models, key=_size)
 
     L: list[str] = []
     add = L.append
@@ -93,7 +96,7 @@ def main() -> None:
                 if not s:
                     continue
                 name = "基座零样本" if variant == "base" else "**微调后**"
-                add(f"| Qwen2.5-{m} | {split.upper()} | {name} | {pct(s['json_valid_rate'])} | "
+                add(f"| Qwen2.5-{m.upper()} | {split.upper()} | {name} | {pct(s['json_valid_rate'])} | "
                     f"{pct(s['schema_valid_rate'])} | **{pct(s['exact_match_rate'])}** | "
                     f"{pct(avg_field_acc(s))} |")
 
@@ -107,7 +110,7 @@ def main() -> None:
             if "base" not in grp or "lora" not in grp:
                 continue
             b, l = grp["base"], grp["lora"]
-            add(f"| Qwen2.5-{m} | {split.upper()} | "
+            add(f"| Qwen2.5-{m.upper()} | {split.upper()} | "
                 f"{pct(b['exact_match_rate'])} → {pct(l['exact_match_rate'])} "
                 f"(**{(l['exact_match_rate']-b['exact_match_rate'])*100:+.1f} pp**) | "
                 f"{pct(b['schema_valid_rate'])} → {pct(l['schema_valid_rate'])} "
@@ -117,7 +120,7 @@ def main() -> None:
 
     # ── 二、字段级 ──
     all_tags = [t for t in sums if "_model" in sums[t]]
-    all_tags.sort(key=lambda t: (float(sums[t]["_model"].rstrip("b")),
+    all_tags.sort(key=lambda t: (float(sums[t]["_model"].rstrip("bB")),
                                  sums[t]["_split"], sums[t]["_variant"]))
     if all_tags:
         add("\n## 二、字段级准确率\n")
@@ -216,7 +219,7 @@ def main() -> None:
             if "base" not in grp or "lora" not in grp:
                 continue
             b, l = grp["base"], grp["lora"]
-            add(f"- **Qwen2.5-{m} / {split.upper()}**：全字段准确率 "
+            add(f"- **Qwen2.5-{m.upper()} / {split.upper()}**：全字段准确率 "
                 f"{pct(b['exact_match_rate'])} → {pct(l['exact_match_rate'])}"
                 f"（{(l['exact_match_rate']-b['exact_match_rate'])*100:+.1f} pp）；"
                 f"Schema 合规率 {pct(b['schema_valid_rate'])} → {pct(l['schema_valid_rate'])}")
@@ -225,7 +228,7 @@ def main() -> None:
         grp = models[m]
         if "iid" in grp and "ood" in grp and "lora" in grp["iid"] and "lora" in grp["ood"]:
             drop = grp["iid"]["lora"]["exact_match_rate"] - grp["ood"]["lora"]["exact_match_rate"]
-            add(f"- **Qwen2.5-{m} 泛化差距**：微调后在未见模板族上全字段准确率下降 "
+            add(f"- **Qwen2.5-{m.upper()} 泛化差距**：微调后在未见模板族上全字段准确率下降 "
                 f"{drop*100:.1f} pp（{pct(grp['iid']['lora']['exact_match_rate'])} → "
                 f"{pct(grp['ood']['lora']['exact_match_rate'])}），说明模型学到的不只是模板记忆。")
 
