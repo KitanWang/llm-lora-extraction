@@ -1,0 +1,81 @@
+{
+  "n": 200,
+  "json_valid_rate": 1.0,
+  "schema_valid_rate": 0.97,
+  "exact_match_rate": 0.225,
+  "field_acc": {
+    "customer_name": 0.95,
+    "product_model": 1.0,
+    "quantity": 0.95,
+    "unit_price": 0.43,
+    "currency": 0.975,
+    "delivery_date": 0.66,
+    "payment_terms": 0.97,
+    "is_urgent": 0.925,
+    "contact_phone": 0.83
+  },
+  "hallucination_rate": {
+    "customer_name": 0.13793103448275862,
+    "quantity": 0.0,
+    "unit_price": 0.0,
+    "delivery_date": 0.0,
+    "payment_terms": 0.0,
+    "contact_phone": 0.022222222222222223
+  },
+  "omission_rate": {
+    "customer_name": 0.03508771929824561,
+    "product_model": 0.0,
+    "quantity": 0.02247191011235955,
+    "unit_price": 0.7808219178082192,
+    "currency": 0.0,
+    "delivery_date": 0.05847953216374269,
+    "payment_terms": 0.006944444444444444,
+    "is_urgent": 0.015,
+    "contact_phone": 0.2129032258064516
+  },
+  "enum_confusion": {
+    "currency": {
+      "USD -> CNY": 5
+    },
+    "payment_terms": {
+      "款到发货 -> 货到付款": 3,
+      "款到发货 -> 货到发货": 2,
+      "月结30天 -> None": 1
+    }
+  },
+  "by_template_family": {
+    "bullet_list": {
+      "n": 43,
+      "schema_valid_rate": 1.0,
+      "exact_match_rate": 0.2558139534883721,
+      "avg_field_acc": 0.868217054263566
+    },
+    "email_formal": {
+      "n": 60,
+      "schema_valid_rate": 0.95,
+      "exact_match_rate": 0.25,
+      "avg_field_acc": 0.8648148148148148
+    },
+    "im_chat": {
+      "n": 59,
+      "schema_valid_rate": 0.9661016949152542,
+      "exact_match_rate": 0.2033898305084746,
+      "avg_field_acc": 0.8380414312617702
+    },
+    "mixed_informal": {
+      "n": 38,
+      "schema_valid_rate": 0.9736842105263158,
+      "exact_match_rate": 0.18421052631578946,
+      "avg_field_acc": 0.847953216374269
+    }
+  },
+  "schema_error_examples": {
+    "1 validation error for InquiryRecord": 6
+  },
+  "tag": "base_7b_iid",
+  "model": "models/Qwen2.5-7B-Instruct",
+  "adapter": null,
+  "elapsed_sec": 944.1,
+  "sec_per_sample": 4.721,
+  "peak_gpu_gib": 5.765
+}

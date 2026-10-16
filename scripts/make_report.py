@@ -188,13 +188,28 @@ def main() -> None:
             f"{s.get('sec_per_sample', '—')} | {s.get('peak_gpu_gib', '—')} |")
 
     # ── 八、训练成本 ──
-    tm = sorted(REPORTS.glob("train_metrics_*.json")) + \
-         sorted(REPORTS.glob("outputs/*/train_metrics.json"))
-    tm = [p for p in tm if p.exists()]
-    # 也扫描 outputs 下的标准名字
-    for p in sorted((ROOT / "outputs").glob("*/train_metrics.json")):
-        if p not in tm:
-            tm.append(p)
+    # 同时收集 reports/train_metrics_*.json 与 outputs/*/train_metrics.json。
+    # 用 resolve() 后的路径去重 —— 否则同一份指标会因「两个来源都命中」而出现两行
+    # （曾出现 7B 在表里重复列出的问题）。
+    # ⚠️ 去重不能按文件路径：reports/train_metrics_7b.json 与
+    # outputs/qwen25-7b-qlora/train_metrics.json 是同一份指标的**两个副本**，
+    # 路径不同但内容同源，按路径去重仍会出现重复行。
+    # 正确做法是按 (基座模型, 输出目录) 这个业务身份去重。
+    seen: dict[tuple[str, str], Path] = {}
+    for p in sorted(REPORTS.glob("train_metrics_*.json")) + \
+             sorted((ROOT / "outputs").glob("*/train_metrics.json")):
+        if not p.exists():
+            continue
+        try:
+            meta = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        cfg = meta.get("config", {})
+        key = (str(cfg.get("model_name_or_path", "")), str(cfg.get("output_dir", "")))
+        # 优先保留 reports/ 下的归档副本（名字更规整）
+        if key not in seen or "reports" in str(p):
+            seen[key] = p
+    tm = sorted(seen.values(), key=lambda x: x.name)
     if tm:
         add("\n## 八、训练成本\n")
         add("| 实验 | 基座 | 方案 | 可训练参数 | 占比 | 峰值显存(GiB) | 训练耗时 | train loss |")

@@ -1,0 +1,73 @@
+{
+  "n": 150,
+  "json_valid_rate": 1.0,
+  "schema_valid_rate": 0.9333333333333333,
+  "exact_match_rate": 0.15333333333333332,
+  "field_acc": {
+    "customer_name": 0.84,
+    "product_model": 1.0,
+    "quantity": 0.96,
+    "unit_price": 0.49333333333333335,
+    "currency": 0.9533333333333334,
+    "delivery_date": 0.6,
+    "payment_terms": 0.9333333333333333,
+    "is_urgent": 0.8933333333333333,
+    "contact_phone": 0.74
+  },
+  "hallucination_rate": {
+    "customer_name": 0.5,
+    "quantity": 0.0,
+    "unit_price": 0.0,
+    "delivery_date": 0.0,
+    "payment_terms": 0.0,
+    "contact_phone": 0.0
+  },
+  "omission_rate": {
+    "customer_name": 0.12837837837837837,
+    "product_model": 0.0,
+    "quantity": 0.022058823529411766,
+    "unit_price": 0.7978723404255319,
+    "currency": 0.0,
+    "delivery_date": 0.12686567164179105,
+    "payment_terms": 0.02608695652173913,
+    "is_urgent": 0.02666666666666667,
+    "contact_phone": 0.2569444444444444
+  },
+  "enum_confusion": {
+    "payment_terms": {
+      "30%定金+70%尾款 -> 30%定金+余款发货前结清": 3,
+      "货到付款 -> None": 2,
+      "款到发货 -> 货到付款": 2,
+      "货到付款 -> 货到验收后付款": 1,
+      "款到发货 -> None": 1,
+      "30%定金+70%尾款 -> 30%定金+70%见提单付款": 1
+    },
+    "currency": {
+      "USD -> CNY": 4,
+      "EUR -> CNY": 3
+    }
+  },
+  "by_template_family": {
+    "phone_transcript": {
+      "n": 59,
+      "schema_valid_rate": 0.9322033898305084,
+      "exact_match_rate": 0.1864406779661017,
+      "avg_field_acc": 0.8210922787193974
+    },
+    "quote_reply": {
+      "n": 91,
+      "schema_valid_rate": 0.9340659340659341,
+      "exact_match_rate": 0.13186813186813187,
+      "avg_field_acc": 0.8253968253968255
+    }
+  },
+  "schema_error_examples": {
+    "1 validation error for InquiryRecord": 10
+  },
+  "tag": "base_7b_ood",
+  "model": "models/Qwen2.5-7B-Instruct",
+  "adapter": null,
+  "elapsed_sec": 755.5,
+  "sec_per_sample": 5.037,
+  "peak_gpu_gib": 5.781
+}
