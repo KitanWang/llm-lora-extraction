@@ -1,32 +1,34 @@
-# 待验证：7B 训练速度差异
+# 7B 训练速度分析（已结案）
 
-## 现象
-- `scripts/sweep_train_config.py` 实测：1.88 s/micro-batch（bs=1, seq_len=832）
-- 实际训练（bs=1, grad_accum=16）：63.5 s/step ÷ 16 = **3.97 s/micro-batch**
+## 结论：4.0 s/micro-batch 是本机正常速度，不存在性能故障
 
-即实际比 sweep 慢 **2.1 倍**，且样本长度相近（652 vs 667 token）。
+### 实测数据（同进程对照，模型只加载一次）
+| 配置 | s/micro-batch | 峰值显存 |
+| :--- | ---: | ---: |
+| 默认分配器 | **4.03** | 6.05 GiB |
+| `expandable_segments:True` | 4.63 | 6.04 GiB |
 
-## 已排除
-- 样本长度差异（实测相近）
-- 数据集版本差异
-- 其他进程争抢（GPU 利用率 99%，无并发任务）
+→ `expandable_segments` **无收益（慢 15%）**，不采用。
 
-## 候选原因
-1. **显存分配器碎片化**：训练时显存 7550/8151 MiB（94%），
-   接近上限时 native 分配器会频繁 cudaMalloc/cudaFree 并同步。
-   sweep 时余量更充裕（6.04 GiB 峰值），未触发该问题。
-   候选解法：`PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`
-2. **gradient checkpointing 的 eager 重算开销**：sweep 与训练都开了，
-   但 sweep 只跑 3-6 步，未进入稳态。
-3. **paged_adamw_8bit 的分页开销**：每 16 个 micro-batch 才 step 一次，
-   影响应被摊薄，但首次分页可能有成本。
+### 换算到训练进度条
+1 个 step = 16 个 micro-batch（梯度累积）：
+`4.03 × 16 ≈ 64.5 s/step`，与实测 63.5~64.3 s/step 完全吻合。
 
-## 验证方法（需在无并发任务时执行）
-1. 基线：现有配置跑 20 步，记录 s/step
-2. 对照组：加 `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` 重跑
-3. 若有效，写入配置与 README
+### 修正此前两个错误结论
+1. **「sweep 实测 1.88 s，实际慢 2.1 倍」是错的**。sweep 脚本当时把 8 条样本
+   编成 1 个 batch 计时，且只丢弃了第 0 步——预热在 batch 变化时并未完成。
+   修正后的基线是 4.03 s/micro-batch，与实际训练一致。
+2. **「expandable_segments 可提速 2 倍」的假设不成立**，实测反而更慢。
 
-## 影响评估
-- 只影响**训练时长**，不影响结果正确性（loss 曲线正常，梯度有限）
-- 200 步 × 63.5s ≈ 3.5 小时，在可接受范围
-- 但「提升 2 倍训练速度」值得作为后续优化项
+### 后期速度退化（64 → 165 s/step）的真实原因
+训练跑到 epoch 1 后期出现的退化，来自**外部干扰**：
+- 我在同一 GPU 上跑了评测验证脚本（5 条推理）；
+- 期间显存余量压到 <100 MiB，触发 WSL 显存超售。
+干扰移除后速度回落。**这不是训练本身的问题**。
+
+### 实际耗时
+7B / 200 步 / bs=1 / grad_accum=16 / seq_len=832：
+约 64 s/step × 200 ≈ 3.5 小时（含 epoch 边界验证）。
+
+### 教训
+性能结论必须在**无并发、且预热充分**的条件下测，否则会把噪声当成结论。

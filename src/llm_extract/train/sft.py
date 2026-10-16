@@ -313,7 +313,23 @@ def main() -> None:
     ap.add_argument("--max-train-samples", type=int, default=None)
     ap.add_argument("--output-dir", type=str, default=None)
     ap.add_argument("--max-steps", type=int, default=-1)
+    ap.add_argument("--resume-from-checkpoint", type=str, default=None,
+                    help="断点续训：传 checkpoint 目录，或 'auto' 自动取最新")
+    ap.add_argument("--expandable-segments", action="store_true",
+                    help="启用 CUDA 可扩展内存段，缓解高显存占用下的分配器碎片化")
     args = ap.parse_args()
+
+    # 必须在 import torch 之后、任何 CUDA 分配之前设置才生效；
+    # 这里通过环境变量让子进程/后续 CUDA 上下文读取到。
+    if args.expandable_segments:
+        import os as _os
+
+        conf = _os.environ.get("PYTORCH_CUDA_ALLOC_CONF", "")
+        if "expandable_segments" not in conf:
+            _os.environ["PYTORCH_CUDA_ALLOC_CONF"] = (
+                (conf + "," if conf else "") + "expandable_segments:True"
+            )
+        print(f"PYTORCH_CUDA_ALLOC_CONF = {_os.environ['PYTORCH_CUDA_ALLOC_CONF']}")
 
     cfg = TrainConfig.from_yaml(args.config)
     if args.max_train_samples is not None:
@@ -376,7 +392,17 @@ def main() -> None:
     )
 
     print("=== 开始训练 ===")
-    train_result = trainer.train()
+    resume = args.resume_from_checkpoint
+    if resume == "auto":
+        # 取 out_dir 下 step 数最大的 checkpoint
+        cands = [d for d in out_dir.glob("checkpoint-*") if (d / "trainer_state.json").exists()]
+        if cands:
+            resume = str(max(cands, key=lambda d: int(d.name.split("-")[-1])))
+            print(f"自动续训自：{resume}")
+        else:
+            resume = None
+            print("未找到 checkpoint，从头训练")
+    train_result = trainer.train(resume_from_checkpoint=resume)
 
     print("=== 保存 LoRA adapter ===")
     trainer.save_model(str(out_dir / "final_adapter"))
